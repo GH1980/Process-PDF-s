@@ -17,6 +17,11 @@ Run `build_exe.bat` on Windows to package `process_pdfs.py` into a
 standalone `DocumentIssueSheet.exe` with PyInstaller. The exe is written to
 the `dist` folder.
 
+A prebuilt `DocumentIssueSheet.exe` is included in this repo, so Windows
+users who don't have Python installed can just download it and double-click
+to run it, without needing to install Python or run `build_exe.bat`. Place
+it in the same folder as the project's Excel template, same as `process_pdfs.py`.
+
 ## Requirements
 
 - Python 3 with `openpyxl` (installed automatically by `process_pdfs.bat`)
