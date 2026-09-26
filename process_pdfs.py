@@ -1,81 +1,158 @@
-import os
-import shutil
-import re
+"""Prepare a project's Document Issue Sheet workbook and add today's issue column.
+
+Run it from the folder holding the "...SH-S-0001-Document Issue Sheet.xlsx"
+template. It creates "<project number>-SH-S-0001-Document Issue Sheet.xlsx"
+from the template (if it doesn't exist yet), writes the project name, and
+adds a dated issue column. Running it again on the same day reuses that
+day's column instead of adding a duplicate.
+"""
+import argparse
 import datetime
+import re
+import shutil
+import sys
 from pathlib import Path
 
 try:
     import openpyxl
 except ImportError:
     print("Error: openpyxl is not installed. Please run: pip install openpyxl")
-    exit(1)
+    sys.exit(1)
 
-def main():
-    # Use current working directory
-    target_dir = Path(os.getcwd())
+TEMPLATE_SUFFIX = "SH-S-0001-Document Issue Sheet.xlsx"
+FIRST_ISSUE_COL = 4  # Column D
+DAY_ROW, MONTH_ROW, YEAR_ROW = 3, 4, 5
+PROJECT_NAME_CELL = "A3"
+SECOND_SHEET_NAME = "Sheet 2"
 
-    proj_number = input("Enter Revit Project Number (e.g., 12345): ").strip() or "00000"
-    proj_name = input("Enter Project Name: ").strip() or "Unnamed Project"
+# Characters Windows doesn't allow in file names
+INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*]')
 
-    # Dynamically look for the template file matching the document issue sheet pattern
-    template_pattern = "*SH-S-0001-Document Issue Sheet.xlsx"
-    template_files = list(target_dir.glob(template_pattern))
 
-    if template_files:
-        template_path = template_files[0]
-        template_filename = template_path.name
-    else:
-        template_filename = "xxxxx-SH-S-0001-Document Issue Sheet.xlsx"
-        template_path = target_dir / template_filename
+def target_filename(proj_number):
+    return f"{proj_number}-{TEMPLATE_SUFFIX}"
 
-    target_filename = f"{proj_number}-SH-S-0001-Document Issue Sheet.xlsx"
-    target_path = target_dir / target_filename
+
+def find_template(folder, exclude_name):
+    """Return the template to copy, preferring placeholder names like 'xxxxx-...'.
+
+    Files already numbered for a project (e.g. '12345-...') are only used as a
+    fallback, and the project's own target file is never used as its template.
+    """
+    candidates = sorted(
+        p for p in folder.glob(f"*{TEMPLATE_SUFFIX}")
+        if p.name != exclude_name and not p.name.startswith("~$")  # skip Excel lock files
+    )
+    if not candidates:
+        return None
+    placeholders = [p for p in candidates if not p.name[0].isdigit()]
+    return (placeholders or candidates)[0]
+
+
+def _two_digits(value):
+    """Normalise a header cell to a 2-digit string so '07', 7 and '7' compare equal."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text.zfill(2) if text.isdigit() else text
+
+
+def find_issue_column(sheet, date):
+    """Return (column, already_present) for the given issue date.
+
+    Scans right from column D. If a column already holds this date it's
+    reused; otherwise the first column with an empty day cell is returned.
+    """
+    wanted = (date.strftime("%d"), date.strftime("%m"), date.strftime("%y"))
+    col = FIRST_ISSUE_COL
+    while sheet.cell(row=DAY_ROW, column=col).value is not None:
+        existing = tuple(
+            _two_digits(sheet.cell(row=row, column=col).value)
+            for row in (DAY_ROW, MONTH_ROW, YEAR_ROW)
+        )
+        if existing == wanted:
+            return col, True
+        col += 1
+    return col, False
+
+
+def update_workbook(path, proj_name, date):
+    """Write the project name and issue date into the workbook. Returns the column used."""
+    wb = openpyxl.load_workbook(path)
+    sheet = wb.active
+
+    col, already_present = find_issue_column(sheet, date)
+    sheet.cell(row=DAY_ROW, column=col, value=date.strftime("%d"))
+    sheet.cell(row=MONTH_ROW, column=col, value=date.strftime("%m"))
+    sheet.cell(row=YEAR_ROW, column=col, value=date.strftime("%y"))
+    sheet[PROJECT_NAME_CELL] = proj_name
+
+    # Make sure the continuation sheet exists for longer drawing lists
+    if SECOND_SHEET_NAME not in wb.sheetnames:
+        wb.copy_worksheet(sheet).title = SECOND_SHEET_NAME
+
+    wb.save(path)
+    return col, already_present
+
+
+def prompt(message, default):
+    answer = input(message).strip()
+    return answer or default
+
+
+def parse_args(argv):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--number", help="Revit project number, e.g. 12345")
+    parser.add_argument("--name", help="Project name")
+    parser.add_argument("--folder", type=Path, default=Path.cwd(),
+                        help="Folder containing the template (default: current folder)")
+    return parser.parse_args(argv)
+
+
+def run(argv=None):
+    args = parse_args(argv)
+    folder = args.folder.resolve()
+
+    proj_number = args.number or prompt("Enter Revit Project Number (e.g., 12345): ", "00000")
+    proj_number = INVALID_FILENAME_CHARS.sub("", proj_number).strip() or "00000"
+    proj_name = args.name or prompt("Enter Project Name: ", "Unnamed Project")
+
+    name = target_filename(proj_number)
+    target_path = folder / name
 
     if not target_path.exists():
-        if template_path.exists():
-            shutil.copy(template_path, target_path)
-            print(f"Created new issue sheet: {target_filename} from template: {template_filename}")
-        else:
-            print(f"Error: Template file matching '{template_pattern}' not found in {target_dir}")
-            return
+        template_path = find_template(folder, exclude_name=name)
+        if template_path is None:
+            print(f"Error: No template matching '*{TEMPLATE_SUFFIX}' found in {folder}")
+            return 1
+        shutil.copy(template_path, target_path)
+        print(f"Created new issue sheet: {name} from template: {template_path.name}")
 
     try:
-        wb = openpyxl.load_workbook(target_path)
-    except Exception as e:
-        print(f"Error opening Excel file (make sure it is closed): {e}")
-        return
-
-    sheet1 = wb.active
-
-    # Find next blank column starting from D (Column 4) for the new issue date
-    target_col = 4
-    while sheet1.cell(row=3, column=target_col).value is not None:
-        target_col += 1
-
-    # Update date header cells (Rows 3, 4, 5)
-    today = datetime.date.today()
-    sheet1.cell(row=3, column=target_col, value=today.strftime("%d"))
-    sheet1.cell(row=4, column=target_col, value=today.strftime("%m"))
-    # Changed "%Y" to "%y" to output a 2-digit year (YY)
-    sheet1.cell(row=5, column=target_col, value=today.strftime("%y"))
-
-    # Update project name
-    sheet1["A3"] = proj_name
-
-    # Handle Sheet 2: ensure blank rows and existing drawing number structures are preserved
-    if "Sheet 2" in wb.sheetnames:
-        sheet2 = wb["Sheet 2"]
-    else:
-        sheet2 = wb.copy_worksheet(sheet1)
-        sheet2.title = "Sheet 2"
-
-    print("Excel template prepared successfully at column index:", target_col)
-
-    try:
-        wb.save(target_path)
-        print(f"Success! Updated sheet saved to: {target_path}")
+        col, already_present = update_workbook(target_path, proj_name, datetime.date.today())
     except PermissionError:
-        print(f"CRITICAL ERROR: Could not save '{target_filename}'. Please make sure it is CLOSED in Excel.")
+        print(f"Error: Could not save '{name}'. Please make sure it is CLOSED in Excel.")
+        return 1
+    except Exception as e:
+        print(f"Error updating '{name}': {e}")
+        return 1
+
+    letter = openpyxl.utils.get_column_letter(col)
+    if already_present:
+        print(f"Today's issue column already existed (column {letter}); project name updated.")
+    else:
+        print(f"Added today's issue date in column {letter}.")
+    print(f"Success! Saved: {target_path}")
+    return 0
+
+
+def main():
+    code = run()
+    # When run as a double-clicked .exe the console closes immediately, so wait first
+    if getattr(sys, "frozen", False):
+        input("\nPress Enter to close...")
+    sys.exit(code)
+
 
 if __name__ == "__main__":
     main()

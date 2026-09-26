@@ -15,7 +15,7 @@ python -m pip install --upgrade pyinstaller openpyxl
 
 echo.
 echo Building exe...
-REM Ensure your Python file is named document_issue_sheet.py, or change the name below to match your file.
+REM Packages process_pdfs.py; change the name below if you rename the script.
 python -m PyInstaller --onefile --console --name "DocumentIssueSheet" process_pdfs.py
 
 echo.

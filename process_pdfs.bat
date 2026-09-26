@@ -1,14 +1,14 @@
 @echo off
 echo =========================================
-echo PDF to Excel Extractor
+echo Document Issue Sheet
 echo =========================================
 echo.
 
 echo Checking for required Python libraries...
-pip install openpyxl
+python -m pip install --quiet openpyxl
 echo.
 
-echo Running PDF extraction script...
+echo Updating Document Issue Sheet...
 python process_pdfs.py
 echo.
 
